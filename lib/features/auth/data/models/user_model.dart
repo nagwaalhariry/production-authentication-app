@@ -1,4 +1,3 @@
-import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:production_authentication_app/features/auth/domain/entities/app_user.dart';
 
 class UserModel extends AppUser {
@@ -10,27 +9,23 @@ class UserModel extends AppUser {
     required super.isEmailVerified,
   });
 
-  factory UserModel.fromFirestore(
-    DocumentSnapshot<Map<String, dynamic>> doc,
-    bool isEmailVerified,
-  ) {
-    final data = doc.data() ?? <String, dynamic>{};
-
+  factory UserModel.fromMap(Map<String, dynamic> data) {
     return UserModel(
-      uid: doc.id,
+      uid: (data['uid'] as String?) ?? '',
       email: (data['email'] as String?) ?? '',
       role: ((data['role'] as String?) ?? 'user').toLowerCase(),
       deviceSerial: (data['deviceSerial'] as String?) ?? '',
-      isEmailVerified: isEmailVerified,
+      isEmailVerified: (data['isEmailVerified'] as bool?) ?? false,
     );
   }
 
-  Map<String, dynamic> toFirestore() {
+  Map<String, dynamic> toMap() {
     return {
+      'uid': uid,
       'email': email,
       'role': role,
       'deviceSerial': deviceSerial,
-      'updatedAt': FieldValue.serverTimestamp(),
+      'isEmailVerified': isEmailVerified,
     };
   }
 }

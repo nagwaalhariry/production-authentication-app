@@ -1,6 +1,6 @@
 import 'dart:async';
+import 'dart:ui';
 
-import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:production_authentication_app/app.dart';
@@ -16,16 +16,12 @@ Future<void> main() async {
     // TODO: Send framework errors to Crashlytics/Sentry in production.
   };
 
-  await runZonedGuarded(
-    () async {
-      // TODO: Configure FlutterFire using `flutterfire configure` and generated options.
-      await Firebase.initializeApp();
-      runApp(const App());
-    },
-    (error, stackTrace) {
-      // TODO: Send uncaught zone errors to Crashlytics/Sentry in production.
-      debugPrint('Uncaught zone error: $error');
-      debugPrintStack(stackTrace: stackTrace);
-    },
-  );
+  PlatformDispatcher.instance.onError = (error, stackTrace) {
+    // TODO: Send uncaught async errors to Crashlytics/Sentry in production.
+    debugPrint('Uncaught platform error: $error');
+    debugPrintStack(stackTrace: stackTrace);
+    return true;
+  };
+
+  runApp(const App());
 }
