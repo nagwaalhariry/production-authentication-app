@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
+import 'package:production_authentication_app/core/design/app_theme.dart';
 import 'package:production_authentication_app/features/auth/data/datasources/auth_remote_data_source.dart';
 import 'package:production_authentication_app/features/auth/data/datasources/device_info_data_source.dart';
 import 'package:production_authentication_app/features/auth/data/repositories/auth_repository_impl.dart';
@@ -38,11 +39,9 @@ class App extends StatelessWidget {
         ),
       ],
       child: MaterialApp(
+        debugShowCheckedModeBanner: false,
         title: 'Production Auth',
-        theme: ThemeData(
-          colorScheme: ColorScheme.fromSeed(seedColor: Colors.deepPurple),
-          useMaterial3: true,
-        ),
+        theme: AppTheme.lightTheme(),
         home: const AuthGatePage(),
       ),
     );

@@ -1,3 +1,5 @@
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:production_authentication_app/core/error/exceptions.dart';
 import 'package:production_authentication_app/features/auth/data/models/user_model.dart';
 
@@ -24,9 +26,15 @@ abstract class AuthRemoteDataSource {
 }
 
 class AuthRemoteDataSourceImpl implements AuthRemoteDataSource {
-  // In-memory auth store used after removing Firebase integration.
-  static final Map<String, _LocalAccount> _accountsByEmail = {};
-  static String? _activeEmail;
+  AuthRemoteDataSourceImpl({FirebaseAuth? firebaseAuth, FirebaseFirestore? firestore})
+      : _firebaseAuth = firebaseAuth ?? FirebaseAuth.instance,
+        _firestore = firestore ?? FirebaseFirestore.instance;
+
+  final FirebaseAuth _firebaseAuth;
+  final FirebaseFirestore _firestore;
+
+  CollectionReference<Map<String, dynamic>> get _users =>
+      _firestore.collection('users');
 
   @override
   Future<UserModel> login({
@@ -34,26 +42,32 @@ class AuthRemoteDataSourceImpl implements AuthRemoteDataSource {
     required String password,
     required String currentDeviceSerial,
   }) async {
-    final normalizedEmail = email.trim().toLowerCase();
-    final account = _accountsByEmail[normalizedEmail];
-    if (account == null || account.password != password) {
-      throw const ServerException('Invalid email or password.');
-    }
-
-    if (account.user.role != 'admin' && account.user.role != 'user') {
-      throw const UnauthorizedRoleException('Invalid role assigned to account.');
-    }
-
-    if (account.deviceSerial.isEmpty) {
-      account.deviceSerial = currentDeviceSerial;
-    } else if (account.deviceSerial != currentDeviceSerial) {
-      throw const DeviceBindingException(
-        'This account is bound to another device. Contact support.',
+    try {
+      final credential = await _firebaseAuth.signInWithEmailAndPassword(
+        email: email,
+        password: password,
       );
-    }
 
-    _activeEmail = normalizedEmail;
-    return account.user;
+      final firebaseUser = credential.user;
+      if (firebaseUser == null) {
+        throw const ServerException('Unable to retrieve authenticated user.');
+      }
+
+      await refreshAuthToken();
+
+      final user = await _resolveAndValidateUser(
+        uid: firebaseUser.uid,
+        fallbackEmail: firebaseUser.email ?? email,
+        isEmailVerified: firebaseUser.emailVerified,
+        currentDeviceSerial: currentDeviceSerial,
+      );
+
+      return user;
+    } on FirebaseAuthException catch (e) {
+      throw ServerException(_mapFirebaseAuthCodeToMessage(e.code));
+    } on FirebaseException catch (e) {
+      throw ServerException(e.message ?? 'Failed to login.');
+    }
   }
 
   @override
@@ -62,95 +76,159 @@ class AuthRemoteDataSourceImpl implements AuthRemoteDataSource {
     required String password,
     required String currentDeviceSerial,
   }) async {
-    final normalizedEmail = email.trim().toLowerCase();
-    if (!normalizedEmail.contains('@')) {
-      throw const ServerException('Email format is invalid.');
-    }
-    if (password.length < 6) {
-      throw const ServerException('Password must be at least 6 characters long.');
-    }
-    if (_accountsByEmail.containsKey(normalizedEmail)) {
-      throw const ServerException('An account with this email already exists.');
-    }
+    try {
+      final credential = await _firebaseAuth.createUserWithEmailAndPassword(
+        email: email,
+        password: password,
+      );
 
-    final uid = DateTime.now().microsecondsSinceEpoch.toString();
-    final account = _LocalAccount(
-      user: UserModel(
-        uid: uid,
-        email: normalizedEmail,
+      final firebaseUser = credential.user;
+      if (firebaseUser == null) {
+        throw const ServerException('Unable to create user account.');
+      }
+
+      final model = UserModel(
+        uid: firebaseUser.uid,
+        email: firebaseUser.email ?? email,
         role: 'user',
         deviceSerial: currentDeviceSerial,
-        isEmailVerified: false,
-      ),
-      password: password,
-      deviceSerial: currentDeviceSerial,
-    );
+        isEmailVerified: firebaseUser.emailVerified,
+      );
 
-    _accountsByEmail[normalizedEmail] = account;
-    _activeEmail = normalizedEmail;
-    return account.user;
+      await _users.doc(model.uid).set({
+        ...model.toFirestore(),
+        'createdAt': FieldValue.serverTimestamp(),
+      });
+
+      return model;
+    } on FirebaseAuthException catch (e) {
+      throw ServerException(_mapFirebaseAuthCodeToMessage(e.code));
+    } on FirebaseException catch (e) {
+      throw ServerException(e.message ?? 'Failed to create account.');
+    }
   }
 
   @override
   Future<void> logout() async {
-    _activeEmail = null;
+    await _firebaseAuth.signOut();
   }
 
   @override
   Future<void> sendEmailVerification() async {
-    final account = _currentAccount;
-    if (account == null) {
+    final user = _firebaseAuth.currentUser;
+    if (user == null) {
       throw const ServerException('No authenticated user found.');
     }
 
-    if (account.user.isEmailVerified) {
+    if (user.emailVerified) {
       return;
     }
-    // TODO: Replace mock verification with real email service when backend is introduced.
-    account.user = UserModel(
-      uid: account.user.uid,
-      email: account.user.email,
-      role: account.user.role,
-      deviceSerial: account.user.deviceSerial,
-      isEmailVerified: true,
-    );
+
+    await user.sendEmailVerification();
   }
 
   @override
   Future<bool> checkEmailVerified() async {
-    final account = _currentAccount;
-    if (account == null) {
+    final user = _firebaseAuth.currentUser;
+    if (user == null) {
       throw const ServerException('No authenticated user found.');
     }
-    return account.user.isEmailVerified;
+
+    await user.reload();
+    return _firebaseAuth.currentUser?.emailVerified ?? false;
   }
 
   @override
   Future<String> refreshAuthToken() async {
-    final account = _currentAccount;
-    if (account == null) {
+    final user = _firebaseAuth.currentUser;
+    if (user == null) {
       throw const ServerException('No authenticated user found.');
     }
-    return 'local-token-${account.user.uid}-${DateTime.now().millisecondsSinceEpoch}';
-  }
 
-  _LocalAccount? get _currentAccount {
-    final email = _activeEmail;
-    if (email == null) {
-      return null;
+    try {
+      return await user.getIdToken(true) ?? '';
+    } on FirebaseAuthException catch (e) {
+      throw ServerException(_mapFirebaseAuthCodeToMessage(e.code));
     }
-    return _accountsByEmail[email];
   }
-}
 
-class _LocalAccount {
-  _LocalAccount({
-    required this.user,
-    required this.password,
-    required this.deviceSerial,
-  });
+  Future<UserModel> _resolveAndValidateUser({
+    required String uid,
+    required String fallbackEmail,
+    required bool isEmailVerified,
+    required String currentDeviceSerial,
+  }) async {
+    final doc = await _users.doc(uid).get();
 
-  UserModel user;
-  final String password;
-  String deviceSerial;
+    if (!doc.exists) {
+      final seeded = UserModel(
+        uid: uid,
+        email: fallbackEmail,
+        role: 'user',
+        deviceSerial: currentDeviceSerial,
+        isEmailVerified: isEmailVerified,
+      );
+
+      await _users.doc(uid).set({
+        ...seeded.toFirestore(),
+        'createdAt': FieldValue.serverTimestamp(),
+      });
+
+      return seeded;
+    }
+
+    final user = UserModel.fromFirestore(doc, isEmailVerified);
+
+    if (user.role != 'admin' && user.role != 'user') {
+      throw const UnauthorizedRoleException('Invalid role assigned to account.');
+    }
+
+    if (user.deviceSerial.isEmpty) {
+      await _users.doc(uid).update({
+        'deviceSerial': currentDeviceSerial,
+        'updatedAt': FieldValue.serverTimestamp(),
+      });
+
+      return UserModel(
+        uid: user.uid,
+        email: user.email,
+        role: user.role,
+        deviceSerial: currentDeviceSerial,
+        isEmailVerified: user.isEmailVerified,
+      );
+    }
+
+    if (user.deviceSerial != currentDeviceSerial) {
+      throw const DeviceBindingException(
+        'This account is bound to another device. Contact support.',
+      );
+    }
+
+    return user;
+  }
+
+  String _mapFirebaseAuthCodeToMessage(String code) {
+    switch (code) {
+      case 'invalid-credential':
+      case 'wrong-password':
+      case 'user-not-found':
+        return 'Invalid email or password.';
+      case 'invalid-email':
+        return 'Email format is invalid.';
+      case 'email-already-in-use':
+        return 'An account with this email already exists.';
+      case 'weak-password':
+        return 'Password must be at least 6 characters long.';
+      case 'network-request-failed':
+        return 'Network issue detected. Please try again.';
+      case 'user-disabled':
+        return 'This account has been disabled.';
+      case 'too-many-requests':
+        return 'Too many attempts. Please wait and retry.';
+      case 'user-token-expired':
+        return 'Session expired. Please sign in again.';
+      default:
+        return 'Authentication failed. Please try again.';
+    }
+  }
 }

@@ -18,15 +18,16 @@ class AuthGatePage extends StatelessWidget {
         ScaffoldMessenger.of(context)
           ..hideCurrentSnackBar()
           ..showSnackBar(
-            SnackBar(content: Text(state.errorMessage)),
+            SnackBar(
+              behavior: SnackBarBehavior.floating,
+              content: Text(state.errorMessage),
+            ),
           );
         context.read<AuthBloc>().add(const AuthErrorConsumed());
       },
       builder: (context, state) {
         if (state.status == RequestStatus.loading) {
-          return const Scaffold(
-            body: Center(child: CircularProgressIndicator()),
-          );
+          return const _LoadingState();
         }
 
         if (state.isAuthenticated && state.user != null) {
@@ -35,6 +36,36 @@ class AuthGatePage extends StatelessWidget {
 
         return const LoginPage();
       },
+    );
+  }
+}
+
+class _LoadingState extends StatelessWidget {
+  const _LoadingState();
+
+  @override
+  Widget build(BuildContext context) {
+    final textTheme = Theme.of(context).textTheme;
+
+    return Scaffold(
+      body: Center(
+        child: AnimatedSwitcher(
+          duration: const Duration(milliseconds: 240),
+          child: Column(
+            key: const ValueKey('loading-state'),
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const SizedBox(
+                width: 34,
+                height: 34,
+                child: CircularProgressIndicator(strokeWidth: 3),
+              ),
+              const SizedBox(height: 14),
+              Text('Please wait...', style: textTheme.titleMedium),
+            ],
+          ),
+        ),
+      ),
     );
   }
 }
